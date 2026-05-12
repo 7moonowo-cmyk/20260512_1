@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>虛擬耳環試戴 - 手勢控制版</title>
+  <!-- 載入 MediaPipe 庫 -->
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh"></script>
+  <style>
+    :root { view-transition-name: root; display: block; }
+    body { margin: 0; overflow: hidden; background: #000; }
+    #video_input { transform: scaleX(-1); display: none; }
+    #output_canvas { width: 100vw; height: 100vh; transform: scaleX(-1); object-fit: contain; display: block; }
+  </style>
+</head>
+<body>
+  <video id="video_input" autoplay playsinline></video>
+  <canvas id="output_canvas"></canvas>
+
+  <script type="module">
+    const videoElement = document.getElementById('video_input');
+    const canvasElement = document.getElementById('output_canvas');
+    const canvasCtx = canvasElement.getContext('2d');
+
+    // 載入耳環圖片
+    const earringImage = new Image();
+    earringImage.src = 'acc1_ring.png'; // 請確保此檔案與 HTML 在同一目錄
+
+    // 初始化 Face Mesh (用於定位耳垂)
+    const faceMesh = new FaceMesh({locateFile: (file) => {
+      return `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${file}`;
+    }});
+
+    faceMesh.setOptions({
+      maxNumFaces: 1,
+      refineLandmarks: true,
+      minDetectionConfidence: 0.5,
+      minTrackingConfidence: 0.5
+    });
+
+    // 初始化 Hands (用於手勢辨識)
+    const hands = new Hands({locateFile: (file) => {
+      return `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`;
+    }});
+
+    hands.setOptions({
+      maxNumHands: 1,
+      modelComplexity: 1,
+      minDetectionConfidence: 0.7,
+      minTrackingConfidence: 0.5
+    });
+
+    let handGestureOne = false;
+
+    // 手部結果回傳
+    hands.onResults((results) => {
+      handGestureOne = false;
+      if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+        const landmarks = results.multiHandLandmarks[0];
+        
+        // 判斷「一」手勢：食指伸直 (8 < 6)，其餘手指彎曲 (12 > 10, 16 > 14, 20 > 18)
+        const isIndexUp = landmarks[8].y < landmarks[6].y;
+        const isMiddleDown = landmarks[12].y > landmarks[10].y;
+        const isRingDown = landmarks[16].y > landmarks[14].y;
+        const isPinkyDown = landmarks[20].y > landmarks[18].y;
+
+        if (isIndexUp && isMiddleDown && isRingDown && isPinkyDown) {
+          handGestureOne = true;
+        }
+      }
+    });
+
+    // 臉部與繪製回傳
+    faceMesh.onResults((results) => {
+      canvasCtx.save();
+      canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
+      
+      // 繪製原始影像
+      canvasCtx.drawImage(results.image, 0, 0, canvasElement.width, canvasElement.height);
+
+      if (handGestureOne && results.multiFaceLandmarks && results.multiFaceLandmarks.length > 0) {
+        const faceLandmarks = results.multiFaceLandmarks[0];
+
+        // 關鍵點：左耳垂 (127附近), 右耳垂 (356附近)
+        // 這裡選用更精確的耳下緣點
+        const leftEarlobe = faceLandmarks[132]; 
+        const rightEarlobe = faceLandmarks[361];
+
+        // 計算臉部寬度以縮放耳環 (點 234 到 454)
+        const faceWidth = Math.sqrt(
+          Math.pow(faceLandmarks[454].x - faceLandmarks[234].x, 2) +
+          Math.pow(faceLandmarks[454].y - faceLandmarks[234].y, 2)
+        ) * canvasElement.width;
+
+        const earringSize = faceWidth * 0.25; // 耳環大小設定為臉寬的 25%
+
+        // 繪製左耳環
+        drawEarring(leftEarlobe, earringSize);
+        // 繪製右耳環
+        drawEarring(rightEarlobe, earringSize);
+      }
+      canvasCtx.restore();
+    });
+
+    function drawEarring(landmark, size) {
+      const x = landmark.x * canvasElement.width;
+      const y = landmark.y * canvasElement.height;
+      
+      // 將圖片中心對準耳垂
+      canvasCtx.drawImage(
+        earringImage, 
+        x - size / 2, 
+        y - size / 4, // 稍微偏上一點讓耳環掛在耳垂感更強
+        size, 
+        size * (earringImage.height / earringImage.width)
+      );
+    }
+
+    // 啟動相機
+    async function startCamera() {
+      const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+      videoElement.srcObject = stream;
+      await videoElement.play();
+      videoElement.onloadedmetadata = () => {
+        canvasElement.width = videoElement.videoWidth;
+        canvasElement.height = videoElement.videoHeight;
+        processVideo();
+      };
+    }
+
+    async function processVideo() {
+      if (videoElement.readyState >= 2) { // 確保影片已經準備好資料
+        await hands.send({image: videoElement});
+        await faceMesh.send({image: videoElement});
+      }
+      requestAnimationFrame(processVideo);
+    }
+
+    startCamera();
+  </script>
+</body>
+</html>
